@@ -1,0 +1,30 @@
+# Cloned repos used for analysis — not part of this project
+work/
+
+# Private working notes — not for publication
+scout/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Excel lock files
+~$*.xlsx

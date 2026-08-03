@@ -2,7 +2,7 @@
 
 **Implementation roadmap, milestone by milestone**
 Version 0.1 · Keshav Kakani
-Synthesizes [ARCHITECTURE.md](ARCHITECTURE.md) · [DESIGN2.md](DESIGN2.md) · [DESIGN3.md](DESIGN3.md) · [DESIGN4.md](DESIGN4.md)
+Synthesizes [ARCHITECTURE.md](ARCHITECTURE.md) · [PIPELINE.md](PIPELINE.md) · [MULTI-AGENT-DESIGN.md](MULTI-AGENT-DESIGN.md) · [REPOSITORY-INTELLIGENCE.md](REPOSITORY-INTELLIGENCE.md)
 
 ---
 
@@ -16,7 +16,7 @@ project, Python wins:
 | Factor | Verdict |
 |---|---|
 | tree-sitter, MCP SDK, provider SDKs, semgrep | Python-first ecosystem across the board |
-| **Pydantic** | The typed inter-agent contracts DESIGN3 requires are *exactly* Pydantic models. Schema validation at every handoff boundary is free. |
+| **Pydantic** | The typed inter-agent contracts in [MULTI-AGENT-DESIGN.md](MULTI-AGENT-DESIGN.md) are *exactly* Pydantic models. Schema validation at every handoff boundary is free. |
 | FastAPI | Already your production stack; SSE and WebSockets you've shipped |
 | Solo velocity | The single most important variable. Go's single-binary deploy doesn't repay the slowdown |
 | Go's real advantage | Concurrency and deployment — neither is the bottleneck. The bottleneck is LLM latency |
@@ -210,7 +210,7 @@ working end-to-end demo at this point already outperforms most portfolio project
 ## M3 · Repository Intelligence L0–L3
 
 **Objective.** Postgres-backed symbol graph: classification, AST, symbols, call graph,
-import graph. [DESIGN4](DESIGN4.md) layers 0–3.
+import graph. [Repository Intelligence](REPOSITORY-INTELLIGENCE.md) layers 0–3.
 
 **Files**
 ```
@@ -250,7 +250,7 @@ answers in milliseconds. Show incremental reindex after a commit taking <3 s.
   omits what it can't prove lies about connectivity.
 - Fixed-size chunking anywhere. Syntax spans only.
 - Reaching for Neo4j. ~500k edges and 1–3 hop queries; recursive CTEs handle it. Re-read
-  [DESIGN4 §3](DESIGN4.md).
+  [Repository Intelligence §3](REPOSITORY-INTELLIGENCE.md).
 - Forgetting `edges(dst_id, type)` — reverse traversal is the hot path for blast radius.
 
 **Commit.** All. Add a benchmark script reporting index time and symbol counts per repo;
@@ -261,7 +261,7 @@ reviewers respond to.**
 
 ## M4 · Retrieval & Context Assembly
 
-**Objective.** The minimum-context algorithm from [DESIGN4 §5](DESIGN4.md), including
+**Objective.** The minimum-context algorithm from [Repository Intelligence §5](REPOSITORY-INTELLIGENCE.md), including
 progressive disclosure and the sufficiency check.
 
 **Files**
@@ -362,7 +362,7 @@ infrastructure rather than a script.
 ## M6 · The Five Agents
 
 **Objective.** Researcher, Planner, Coder, Reviewer, Debugger with Pydantic contracts and
-per-role model routing. [DESIGN3](DESIGN3.md) realized.
+per-role model routing. [Multi-Agent Design](MULTI-AGENT-DESIGN.md) realized.
 
 **Files**
 ```
@@ -796,8 +796,9 @@ and resolve-rate numbers, which is exactly why doing so is differentiating.
 
 ### Reconciling with the earlier docs
 
-ARCHITECTURE.md §28 proposed four phases predating DESIGN2–4. This roadmap supersedes it:
+ARCHITECTURE.md §28 proposed four phases predating the three design docs. This roadmap supersedes it:
 its Phase 1 ≈ M0–M2, Phase 2 ≈ M5–M7, Phase 3 ≈ M8–M11, Phase 4 ≈ M12–M14, with M3–M4
 (repository intelligence) promoted from an implicit assumption to explicit milestones —
-because DESIGN4 established that retrieval quality, not agent cleverness, is the binding
+because [REPOSITORY-INTELLIGENCE.md](REPOSITORY-INTELLIGENCE.md) established that retrieval
+quality, not agent cleverness, is the binding
 constraint on output quality.

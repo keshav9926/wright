@@ -10,7 +10,19 @@ Claude Code — deliberately narrower in scope, fully self-hostable, and open.
 
 ---
 
-## [ROADMAP.md](ROADMAP.md)
+## Documents
+
+| Document | Covers |
+|---|---|
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | System design. Five agent architectures compared — single, planner+executor, four-role, hierarchical, event-driven — and the choice defended. Module boundaries, state, memory hierarchy, security, deployment. |
+| **[PIPELINE.md](PIPELINE.md)** | Issue → pull request in 27 stages. Each with inputs, outputs, failure modes, recovery, caching, and latency budgets. Three autonomy tiers, plus how this compares to Devin, Claude Code, Cursor, and Codex. |
+| **[MULTI-AGENT-DESIGN.md](MULTI-AGENT-DESIGN.md)** | Why 22 candidate agents collapse to 5. Communication topology, orchestration, parallelism, token optimization, and where human approval belongs. |
+| **[REPOSITORY-INTELLIGENCE.md](REPOSITORY-INTELLIGENCE.md)** | Understanding codebases at 1M+ LOC. Nine knowledge layers, minimum-context selection, progressive disclosure, and why the file is the wrong primitive. |
+| **[ROADMAP.md](ROADMAP.md)** | 15 milestones, ~30k LOC. Each independently testable and ending in a working demo. |
+
+---
+
+## Roadmap
 
 15 milestones, ~30k LOC. Each is independently testable and ends in a working demo.
 

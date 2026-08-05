@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wright-index"
+version = "0.1.0"
+description = "Code intelligence server: indexes a repository once, answers questions grep cannot."
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    # Core parsing engine. The Python binding wraps the C library; each
+    # language grammar ships as its own compiled wheel (below).
+    # <0.26 pin: 0.26.0 has a native use-after-free — query-captured nodes
+    # dangle and reading .start_byte access-violates (reproduced on Windows,
+    # py3.13, indexing HAMi's cmd/device-plugin/nvidia/main.go). 0.25.2 is
+    # clean on the identical input. Revisit when 0.26.1 lands.
+    "tree-sitter>=0.23,<0.26",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-go>=0.23",
+    "tree-sitter-typescript>=0.23",
+    # CLI framework (typer) and terminal tables (rich).
+    "typer>=0.12",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+# Installs the `wi` command -> calls wright_index.cli:app (a Typer app is callable).
+wi = "wright_index.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

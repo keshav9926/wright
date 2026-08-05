@@ -7,14 +7,14 @@ that no amount of grepping can answer — then serves those answers to Claude Co
 knowledge layer that makes an existing agent measurably better on codebases it has never
 seen.
 
-Scope: layers **L0–L3 and L6** from [REPOSITORY-INTELLIGENCE.md](REPOSITORY-INTELLIGENCE.md).
+Scope: layers **L0–L3 and L6** from [REPOSITORY-INTELLIGENCE.md](docs/design/REPOSITORY-INTELLIGENCE.md).
 Languages: Python, Go, TypeScript. Storage: SQLite. ~4,000 LOC.
 
 ---
 
 ## Why this and not WRIGHT
 
-|  | WRIGHT ([ROADMAP.md](ROADMAP.md)) | wright-index |
+|  | WRIGHT ([ROADMAP.md](docs/design/ROADMAP.md)) | wright-index |
 |---|---|---|
 | What it is | Autonomous agent: issue → merged PR | Knowledge layer serving an agent |
 | Relationship to Claude Code | Replaces it | Extends it |
@@ -165,6 +165,6 @@ because it's the current interface every AI company is building against.
 
 L4 operational (build/test introspection), L5 documentary, L7 social (maintainer graph, PR
 history), L8 semantic (embeddings). All are in
-[REPOSITORY-INTELLIGENCE.md](REPOSITORY-INTELLIGENCE.md) and all are additive later. L8 in
+[REPOSITORY-INTELLIGENCE.md](docs/design/REPOSITORY-INTELLIGENCE.md) and all are additive later. L8 in
 particular is deferred on purpose — symbol and graph lookup answers most questions, and
 embeddings are the expensive layer that gets reached for first and helps least.

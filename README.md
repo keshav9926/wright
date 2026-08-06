@@ -23,24 +23,30 @@ that makes an existing agent measurably better on a codebase it has never seen:
 | Day | Deliverable | Status |
 |---|---|---|
 | **1** | **Symbol indexer** — walk, parse (tree-sitter), extract, store (SQLite). `wi index` / `wi symbols` / `wi stats` | ✅ **done** |
-| 2 | **Call graph** — import + call-site resolution, `CALLS`/`CALLED_BY` edges, `wi callers`, `wi refs` | next |
-| 3 | **Git history mining** — co-change coupling via association rules, `wi cochange`, `wi blast-radius`, `wi tests-for` | |
+| **2** | **Call graph** — import + call-site resolution with per-edge confidence, `wi callers` / `wi calls` / `wi refs` | ✅ **done** |
+| 3 | **Git history mining** — co-change coupling via association rules, `wi cochange`, `wi blast-radius`, `wi tests-for` | next |
 | 4 | **MCP server** — `find_symbol`, `callers`, `blast_radius`, `cochange`, `covering_tests`, `repo_map` as tools Claude Code calls | |
 | 5 | **Incremental reindex + benchmark** — content-hash invalidation; measured tokens-to-answer with vs. without the index | |
 
 Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-ROADMAP.md).
 
-**Day 1 verified against a real repo** — [HAMi](https://github.com/Project-HAMi/HAMi)
-(CNCF, 163 Go files, 64k lines):
+**Verified against a real repo** — [HAMi](https://github.com/Project-HAMi/HAMi)
+(CNCF, ~170 Go files, 69k lines):
 
-- **1,705 symbols indexed in ~10s** — functions, methods, structs, interfaces, types,
-  with signatures, doc comments, and visibility
+- **1,823 symbols + 11,562 call edges indexed in ~15s** — symbols carry signatures,
+  doc comments, visibility; edges carry per-site confidence and HOW they were proven
+  (`receiver` / `package` / `import` / `same_file` / `name_only`)
+- `wi callers trimMemory` returns the **actual three callers** of
+  `Devices.trimMemory`, receiver-proven at 0.95 — grep returns name-collision soup
 - `wi symbols --name Fit --kind method` returns **all 16 vendor implementations of the
-  scheduler's `Fit()`** across `pkg/device/*` — the "who implements this interface"
-  question, answered from SQL in milliseconds
-- Generated code (`api_mock.go`) auto-excluded; a file with syntax the grammar couldn't
-  fully parse still yielded its intact symbols (tree-sitter is error-tolerant by design)
-- 30/30 tests passing
+  scheduler's `Fit()`** across `pkg/device/*`
+- Two-hop transitive callers via recursive CTE: **0.5ms**
+- Unprovable targets (interface dispatch, external packages) are stored as
+  unresolved rather than guessed — a wrong edge poisons every downstream query
+- Generated code auto-excluded; files with parse errors still yield intact symbols
+- 37/37 tests passing
+- The graph already earned its keep: an audit of this repo's device layer found a
+  nil-map panic, now [fixed upstream](https://github.com/Project-HAMi/HAMi/pull/2416)
 
 ---
 
@@ -49,10 +55,13 @@ Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-R
 ```bash
 pip install -e ".[dev]"          # Python ≥3.10
 
-wi index  path/to/repo           # build the index (~10s per 60k lines)
+wi index  path/to/repo           # build the index (~15s per 70k lines)
 wi symbols path/to/repo --file device.go             # everything in one file
 wi symbols path/to/repo --name Fit --kind method     # filtered lookup
 wi symbols path/to/repo --exported --no-tests        # public API surface only
+wi callers path/to/repo trimMemory --depth 2         # who calls this (transitive)
+wi calls  path/to/repo Devices.MutateAdmission       # what this calls, with proof
+wi refs   path/to/repo Fit                           # every call site, incl. unproven
 wi stats  path/to/repo           # what's in the index
 ```
 

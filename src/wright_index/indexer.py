@@ -28,8 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import Database, db_path_for
-from .extract import EXTRACTORS
+from .extract import CALL_EXTRACTORS, EXTRACTORS, IMPORT_EXTRACTORS
 from .parsers import get_parser
+from .resolver import Resolver
 from .walker import iter_source_files
 
 
@@ -50,6 +51,11 @@ class IndexResult:
     files_by_language: dict = field(default_factory=dict)
     symbols_by_kind: dict = field(default_factory=dict)
     skipped_by_reason: dict = field(default_factory=dict)
+    # Day 2 (pass 2) tallies:
+    edge_count: int = 0                         # call edges stored
+    edges_resolved: int = 0                     # ... with a proven dst symbol
+    import_count: int = 0
+    edges_by_resolution: dict = field(default_factory=dict)
 
 
 def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
@@ -68,6 +74,11 @@ def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
     db = Database(db_path, fresh=True)
     result = IndexResult(repo_root=root, db_path=db_path)
     started = time.perf_counter()
+
+    # Files that parsed in pass 1, queued for pass 2 (call/import extraction
+    # needs the COMPLETE symbol table first — you can't resolve a cross-file
+    # call to a symbol that hasn't been indexed yet).
+    parsed_files: list[tuple[int, Path, str]] = []
 
     try:
         # One transaction around the entire run: 10k files = ONE fsync.
@@ -98,6 +109,7 @@ def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
             # ---- store --------------------------------------------------
             file_id = db.insert_file(sf, parse_ok=parse_ok)
             db.insert_symbols(file_id, symbols)
+            parsed_files.append((file_id, sf.abs_path, sf.language))
 
             # ---- tallies for the summary table -------------------------
             result.files_indexed += 1
@@ -108,6 +120,35 @@ def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
             lang_stats["lines"] += sf.line_count
             for s in symbols:
                 result.symbols_by_kind[s.kind] = result.symbols_by_kind.get(s.kind, 0) + 1
+
+        # ================= PASS 2 — the call graph (Day 2) ================
+        # Re-parse each file (tree-sitter is fast; holding 10k trees in
+        # memory would not be) and extract call sites + imports. The
+        # Resolver sees the complete symbol table from pass 1 — same
+        # connection, same open transaction, so nothing is committed yet.
+        resolver = Resolver(db, root)
+        for file_id, abs_path, language in parsed_files:
+            try:
+                content = abs_path.read_bytes()
+            except OSError:
+                continue  # deleted between passes; its symbols stay, no edges
+            tree = get_parser(language).parse(content)
+            calls = CALL_EXTRACTORS[language](content, tree)
+            imports = IMPORT_EXTRACTORS[language](content, tree)
+
+            edge_rows, import_rows = resolver.resolve_file(
+                file_id, language, imports, calls)
+            db.insert_edges(edge_rows)
+            db.insert_imports(import_rows)
+
+            result.edge_count += len(edge_rows)
+            result.import_count += len(import_rows)
+            for row in edge_rows:
+                if row[1] is not None:              # dst_symbol_id present
+                    result.edges_resolved += 1
+                res = row[5]                        # resolution tag
+                result.edges_by_resolution[res] = (
+                    result.edges_by_resolution.get(res, 0) + 1)
 
         result.seconds = time.perf_counter() - started
 

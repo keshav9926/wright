@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from ..parsers import capture_one, compile_query, query_matches
 from .base import (
+    CallSite,
+    ImportRecord,
     Symbol,
     ancestor_scopes,
     clean_docstring,
@@ -88,6 +90,103 @@ def extract(source: bytes, tree) -> list[Symbol]:
         ))
 
     return symbols
+
+
+# --- Day 2: call sites -----------------------------------------------------
+# Two shapes cover Python calls:
+#   foo(...)      -> function is a plain identifier
+#   x.foo(...)    -> function is an attribute; object may be anything
+CALL_QUERY = """
+(call function: (identifier) @callee) @call
+(call function: (attribute object: (_) @obj attribute: (identifier) @callee)) @call
+"""
+
+# import a.b [as c]   /   from a.b import x [as y], z
+IMPORT_QUERY = """
+(import_statement) @imp
+(import_from_statement) @imp
+"""
+
+
+def extract_calls(source: bytes, tree) -> list[CallSite]:
+    """Every call expression in the file, with receiver hints.
+
+    Called by: indexer pass 2, per parsed Python file.
+    The `self.foo()` case gets receiver_type_hint = enclosing class name,
+    so the resolver can turn it into ClassName.foo without type inference.
+    """
+    query = compile_query("python", CALL_QUERY)
+    calls: list[CallSite] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        call_node = capture_one(captures, "call")
+        callee_node = capture_one(captures, "callee")
+        obj_node = capture_one(captures, "obj")
+        if call_node is None or callee_node is None:
+            continue
+        receiver = node_text(obj_node, source) if obj_node is not None else None
+
+        hint = None
+        if receiver == "self" or receiver == "cls":
+            # self.foo() -> the class we're inside IS the receiver type.
+            scopes = ancestor_scopes(call_node, frozenset({"class_definition"}), source)
+            hint = scopes[-1] if scopes else None
+
+        calls.append(CallSite(
+            callee=node_text(callee_node, source),
+            receiver=receiver,
+            receiver_type_hint=hint,
+            line=call_node.start_point.row + 1,
+            start_byte=call_node.start_byte,
+        ))
+    return calls
+
+
+def extract_imports(source: bytes, tree) -> list[ImportRecord]:
+    """Every import binding in the file.
+
+    Called by: indexer pass 2. Walks the two import statement shapes by
+    hand (queries can't easily express 'each name in the list' pairing).
+    """
+    query = compile_query("python", IMPORT_QUERY)
+    records: list[ImportRecord] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        stmt = capture_one(captures, "imp")
+        if stmt is None:
+            continue
+        line = stmt.start_point.row + 1
+
+        if stmt.type == "import_statement":
+            # import a.b.c [as d] — each child is dotted_name or aliased_import
+            for child in stmt.named_children:
+                if child.type == "dotted_name":
+                    mod = node_text(child, source)
+                    # unaliased: the FIRST segment becomes the local name
+                    records.append(ImportRecord(mod, None, mod.split(".")[0], line))
+                elif child.type == "aliased_import":
+                    name = child.child_by_field_name("name")
+                    alias = child.child_by_field_name("alias")
+                    if name is not None and alias is not None:
+                        records.append(ImportRecord(
+                            node_text(name, source), None, node_text(alias, source), line))
+
+        else:  # import_from_statement: from MOD import x [as y], z
+            mod_node = stmt.child_by_field_name("module_name")
+            mod = node_text(mod_node, source) if mod_node is not None else ""
+            for child in stmt.named_children:
+                if child is mod_node:
+                    continue
+                if child.type == "dotted_name":          # from m import x
+                    sym = node_text(child, source)
+                    records.append(ImportRecord(mod, sym, sym, line))
+                elif child.type == "aliased_import":     # from m import x as y
+                    name = child.child_by_field_name("name")
+                    alias = child.child_by_field_name("alias")
+                    if name is not None and alias is not None:
+                        records.append(ImportRecord(
+                            mod, node_text(name, source), node_text(alias, source), line))
+                elif child.type == "wildcard_import":    # from m import *
+                    records.append(ImportRecord(mod, "*", "*", line))
+    return records
 
 
 def _nearest_scope_is_class(def_node) -> bool:

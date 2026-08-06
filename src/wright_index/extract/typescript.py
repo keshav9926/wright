@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from ..parsers import capture_one, compile_query, query_matches
 from .base import (
+    CallSite,
+    ImportRecord,
     Symbol,
     ancestor_scopes,
     clean_docstring,
@@ -134,6 +136,100 @@ def extract(source: bytes, tree, lang_key: str = "typescript") -> list[Symbol]:
         ))
 
     return symbols
+
+
+# --- Day 2: call sites -----------------------------------------------------
+#   foo(...)       -> plain identifier
+#   x.foo(...)     -> member expression; x may be an import namespace, a
+#                     variable, or `this`
+CALL_QUERY = """
+(call_expression function: (identifier) @callee) @call
+(call_expression function: (member_expression object: (_) @obj property: (property_identifier) @callee)) @call
+"""
+
+IMPORT_QUERY = """
+(import_statement) @imp
+"""
+
+
+def extract_calls(source: bytes, tree, lang_key: str = "typescript") -> list[CallSite]:
+    """Every call expression; `this.foo()` gets the enclosing class as its
+    receiver_type_hint (same trick as Python's self).
+
+    Called by: indexer pass 2, per parsed .ts/.tsx file.
+    """
+    query = compile_query(lang_key, CALL_QUERY)
+    calls: list[CallSite] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        call_node = capture_one(captures, "call")
+        callee_node = capture_one(captures, "callee")
+        obj_node = capture_one(captures, "obj")
+        if call_node is None or callee_node is None:
+            continue
+        receiver = node_text(obj_node, source) if obj_node is not None else None
+
+        hint = None
+        if receiver == "this":
+            scopes = ancestor_scopes(call_node, _CLASS_SCOPES, source)
+            hint = scopes[-1] if scopes else None
+
+        calls.append(CallSite(
+            callee=node_text(callee_node, source),
+            receiver=receiver,
+            receiver_type_hint=hint,
+            line=call_node.start_point.row + 1,
+            start_byte=call_node.start_byte,
+        ))
+    return calls
+
+
+def extract_imports(source: bytes, tree, lang_key: str = "typescript") -> list[ImportRecord]:
+    """Every import binding: default, named (with aliases), and namespace.
+
+        import Client from './client'        -> alias Client, symbol default
+        import { a, b as c } from './mod'    -> (a,a), (b,c)
+        import * as ns from './util'         -> alias ns, whole module
+
+    Called by: indexer pass 2. Only relative specifiers ('./x', '../y')
+    resolve to repo files; package imports stay external. tsconfig path
+    aliases are a known gap — deferred, noted in resolver.py.
+    """
+    query = compile_query(lang_key, IMPORT_QUERY)
+    records: list[ImportRecord] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        stmt = capture_one(captures, "imp")
+        if stmt is None:
+            continue
+        src_node = stmt.child_by_field_name("source")
+        if src_node is None:
+            continue
+        module = node_text(src_node, source).strip("\"'")
+        line = stmt.start_point.row + 1
+
+        for clause in stmt.named_children:
+            if clause.type != "import_clause":
+                continue
+            for item in clause.named_children:
+                if item.type == "identifier":            # default import
+                    name = node_text(item, source)
+                    records.append(ImportRecord(module, "default", name, line))
+                elif item.type == "namespace_import":    # * as ns
+                    ident = item.named_children[0] if item.named_child_count else None
+                    if ident is not None:
+                        records.append(ImportRecord(
+                            module, None, node_text(ident, source), line))
+                elif item.type == "named_imports":       # { a, b as c }
+                    for spec in item.named_children:
+                        if spec.type != "import_specifier":
+                            continue
+                        name_node = spec.child_by_field_name("name")
+                        alias_node = spec.child_by_field_name("alias")
+                        if name_node is None:
+                            continue
+                        name = node_text(name_node, source)
+                        alias = node_text(alias_node, source) if alias_node is not None else name
+                        records.append(ImportRecord(module, name, alias, line))
+    return records
 
 
 def _under_export(node) -> bool:

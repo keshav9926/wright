@@ -60,11 +60,41 @@ CREATE TABLE IF NOT EXISTS symbols (
     is_exported    INTEGER NOT NULL DEFAULT 1
 );
 
+-- Day 2: the graph. One row per call site. dst_symbol_id NULL = we saw the
+-- call but could not prove which definition it targets (dynamic dispatch,
+-- external library, ambiguous name) — dst_name is ALWAYS kept, so `wi refs`
+-- can show every site even when resolution failed. Honesty over false edges.
+CREATE TABLE IF NOT EXISTS edges (
+    id            INTEGER PRIMARY KEY,
+    kind          TEXT NOT NULL DEFAULT 'calls',
+    src_symbol_id INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+    dst_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
+    dst_name      TEXT NOT NULL,       -- callee as written at the site
+    line          INTEGER NOT NULL,    -- call-site line in src's file
+    confidence    REAL NOT NULL,       -- 1.0 proof .. 0.5 lone-name heuristic
+    resolution    TEXT NOT NULL        -- same_file|package|import|receiver|
+                                       -- name_only|unresolved
+);
+
+CREATE TABLE IF NOT EXISTS imports (
+    id               INTEGER PRIMARY KEY,
+    file_id          INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    module           TEXT NOT NULL,    -- raw specifier as written
+    symbol           TEXT,             -- from-import / named-import name
+    alias            TEXT NOT NULL,    -- local name call sites actually use
+    line             INTEGER NOT NULL,
+    resolved_file_id INTEGER REFERENCES files(id) ON DELETE CASCADE
+);
+
 -- The lookups the CLI (and Day 4's MCP tools) actually run:
 CREATE INDEX IF NOT EXISTS idx_symbols_name  ON symbols(name);      -- wi symbols --name
 CREATE INDEX IF NOT EXISTS idx_symbols_file  ON symbols(file_id);   -- wi symbols --file
 CREATE INDEX IF NOT EXISTS idx_symbols_kind  ON symbols(kind);      -- wi symbols --kind
 CREATE INDEX IF NOT EXISTS idx_files_path    ON files(path);
+CREATE INDEX IF NOT EXISTS idx_edges_src     ON edges(src_symbol_id);  -- wi calls
+CREATE INDEX IF NOT EXISTS idx_edges_dst     ON edges(dst_symbol_id);  -- wi callers
+CREATE INDEX IF NOT EXISTS idx_edges_name    ON edges(dst_name);       -- wi refs
+CREATE INDEX IF NOT EXISTS idx_imports_file  ON imports(file_id);
 """
 
 
@@ -138,6 +168,26 @@ class Database:
               s.signature, s.docstring, int(s.is_exported)) for s in symbols],
         )
 
+    def insert_edges(self, rows: list[tuple]) -> None:
+        """Bulk insert call edges. Row shape:
+        (src_symbol_id, dst_symbol_id|None, dst_name, line, confidence, resolution).
+        Called by: resolver.resolve_repository(), once per file."""
+        self.conn.executemany(
+            "INSERT INTO edges (src_symbol_id, dst_symbol_id, dst_name, line,"
+            " confidence, resolution) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+    def insert_imports(self, rows: list[tuple]) -> None:
+        """Bulk insert imports. Row shape:
+        (file_id, module, symbol|None, alias, line, resolved_file_id|None).
+        Called by: resolver.resolve_repository()."""
+        self.conn.executemany(
+            "INSERT INTO imports (file_id, module, symbol, alias, line,"
+            " resolved_file_id) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
     def set_meta(self, key: str, value: str) -> None:
         """Upsert into meta (indexed_at, repo_root, commit sha, timings)."""
         self.conn.execute(
@@ -190,6 +240,72 @@ class Database:
             f" JOIN files f ON f.id = s.file_id {where}"
             f" ORDER BY f.path, s.start_line LIMIT ?",
             (*params, limit),
+        ).fetchall()
+
+    def find_symbols_by_name(self, name: str) -> list[sqlite3.Row]:
+        """Exact-name (or qualified-name) lookup used by wi callers/refs to
+        pick the target. Called by: cli.callers(), cli.refs()."""
+        return self.conn.execute(
+            "SELECT s.*, f.path AS file_path FROM symbols s"
+            " JOIN files f ON f.id = s.file_id"
+            " WHERE s.name = ? OR s.qualified_name = ?"
+            " ORDER BY f.path", (name, name),
+        ).fetchall()
+
+    def callers_of(self, symbol_id: int, depth: int = 1) -> list[sqlite3.Row]:
+        """Who calls this symbol — transitively up to `depth` hops.
+
+        The recursive CTE walks CALLED_BY edges upward: seed with the target,
+        repeatedly join edges whose dst is already in the set, collect srcs.
+        UNION (not UNION ALL) dedupes, which also terminates cycles
+        (recursion can't re-add a row it already produced).
+
+        Called by: cli.callers(). Day 4's blast_radius tool is this + tests.
+        """
+        return self.conn.execute(
+            """
+            WITH RECURSIVE up(id, depth, via_line, via_conf) AS (
+                SELECT ?, 0, NULL, NULL
+                UNION
+                SELECT e.src_symbol_id, up.depth + 1, e.line, e.confidence
+                FROM edges e JOIN up ON e.dst_symbol_id = up.id
+                WHERE up.depth < ?
+            )
+            SELECT s.qualified_name, s.kind, f.path AS file_path,
+                   up.via_line AS call_line, up.via_conf AS confidence,
+                   MIN(up.depth) AS depth
+            FROM up JOIN symbols s ON s.id = up.id
+                    JOIN files f ON f.id = s.file_id
+            WHERE up.depth > 0
+            GROUP BY s.id
+            ORDER BY depth, f.path
+            """, (symbol_id, depth),
+        ).fetchall()
+
+    def calls_from(self, symbol_id: int) -> list[sqlite3.Row]:
+        """What this symbol calls (outgoing edges, resolved or not).
+        Called by: cli.calls()."""
+        return self.conn.execute(
+            "SELECT e.dst_name, e.line, e.confidence, e.resolution,"
+            "       s.qualified_name AS dst_qualified, f.path AS dst_file"
+            " FROM edges e"
+            " LEFT JOIN symbols s ON s.id = e.dst_symbol_id"
+            " LEFT JOIN files f ON f.id = s.file_id"
+            " WHERE e.src_symbol_id = ? ORDER BY e.line", (symbol_id,),
+        ).fetchall()
+
+    def refs_by_name(self, name: str, limit: int = 200) -> list[sqlite3.Row]:
+        """Every call site whose callee NAME matches — including unresolved
+        ones. This is the honest view: interface dispatch shows up here even
+        when no edge could be proven. Called by: cli.refs()."""
+        return self.conn.execute(
+            "SELECT e.dst_name, e.line, e.confidence, e.resolution,"
+            "       src.qualified_name AS caller, f.path AS caller_file"
+            " FROM edges e"
+            " JOIN symbols src ON src.id = e.src_symbol_id"
+            " JOIN files f ON f.id = src.file_id"
+            " WHERE e.dst_name = ? ORDER BY f.path, e.line LIMIT ?",
+            (name, limit),
         ).fetchall()
 
     def stats(self) -> dict:

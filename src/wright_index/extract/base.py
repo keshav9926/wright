@@ -14,7 +14,7 @@ Called by: the three extractor modules. Nothing here touches the DB or the
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -36,6 +36,45 @@ class Symbol:
     docstring: str | None = None # docstring (py) or preceding comment (go/ts)
     parent: str | None = None    # qualified name of enclosing scope, or None
     is_exported: bool = True     # language-specific visibility heuristic
+
+
+@dataclass
+class CallSite:
+    """One call expression found inside a file (Day 2).
+
+    Produced by: each extractor's extract_calls().
+    Consumed by: resolver.resolve_file(), which decides which Symbol row
+                 (if any) this call actually targets and emits an edge.
+    """
+
+    callee: str                       # the name being called: "trimMemory"
+    receiver: str | None              # raw text left of the dot ("dev", "pkg",
+                                      # "self") or None for plain foo() calls
+    receiver_type_hint: str | None    # filled ONLY when the extractor could
+                                      # prove the receiver's type from the tree
+                                      # alone: self/this -> enclosing class,
+                                      # Go receiver var -> receiver type
+    line: int                         # 1-indexed call-site line
+    start_byte: int                   # used to find the ENCLOSING symbol via
+                                      # byte-range containment
+
+
+@dataclass
+class ImportRecord:
+    """One import binding in a file (Day 2).
+
+    Produced by: each extractor's extract_imports().
+    Consumed by: resolver — imports are the bridge that turns "callee name"
+                 into "callee name defined in THAT file".
+    """
+
+    module: str            # raw module/path text: "pkg/util", "..helpers", "./api"
+    symbol: str | None     # `from m import X` / `import {X}` -> "X"; None for
+                           # whole-module imports
+    alias: str             # the LOCAL name this binding answers to — what
+                           # actually appears in call sites ("np" for
+                           # `import numpy as np`)
+    line: int
 
 
 def node_text(node, source: bytes) -> str:

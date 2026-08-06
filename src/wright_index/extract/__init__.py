@@ -27,4 +27,20 @@ EXTRACTORS = {
     "tsx": functools.partial(typescript.extract, lang_key="tsx"),
 }
 
-__all__ = ["EXTRACTORS", "Symbol"]
+# Day 2 registries — same shape, same tsx binding rule. The indexer's pass 2
+# looks up all three by the file's language key and stays language-blind.
+CALL_EXTRACTORS = {
+    "python": python.extract_calls,
+    "go": go.extract_calls,
+    "typescript": typescript.extract_calls,
+    "tsx": functools.partial(typescript.extract_calls, lang_key="tsx"),
+}
+
+IMPORT_EXTRACTORS = {
+    "python": python.extract_imports,
+    "go": go.extract_imports,
+    "typescript": typescript.extract_imports,
+    "tsx": functools.partial(typescript.extract_imports, lang_key="tsx"),
+}
+
+__all__ = ["EXTRACTORS", "CALL_EXTRACTORS", "IMPORT_EXTRACTORS", "Symbol"]

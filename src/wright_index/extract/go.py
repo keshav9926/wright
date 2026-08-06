@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from ..parsers import capture_one, compile_query, query_matches
 from .base import (
+    CallSite,
+    ImportRecord,
     Symbol,
     clean_docstring,
     collapse_ws,
@@ -76,6 +78,107 @@ def extract(source: bytes, tree) -> list[Symbol]:
                                  qualified=name, parent=None, signature=sig))
 
     return symbols
+
+
+# --- Day 2: call sites -----------------------------------------------------
+#   Foo(...)        -> plain identifier (same package — Go resolves per DIR)
+#   x.Foo(...)      -> selector: x is a package alias OR a value (method call)
+CALL_QUERY = """
+(call_expression function: (identifier) @callee) @call
+(call_expression function: (selector_expression operand: (identifier) @obj field: (field_identifier) @callee)) @call
+"""
+
+IMPORT_QUERY = """
+(import_spec) @spec
+"""
+
+
+def extract_calls(source: bytes, tree) -> list[CallSite]:
+    """Every call expression, with the Go-specific receiver trick:
+
+    Inside `func (dev *Devices) Reset()`, a call `dev.trimMemory(x)` has
+    operand == the receiver VARIABLE. The tree alone proves dev's type is
+    Devices, so receiver_type_hint = "Devices" — the resolver turns this
+    into Devices.trimMemory with high confidence, no type inference needed.
+    This one heuristic resolves most intra-type method calls in real Go.
+
+    Called by: indexer pass 2, per parsed .go file.
+    """
+    query = compile_query("go", CALL_QUERY)
+    calls: list[CallSite] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        call_node = capture_one(captures, "call")
+        callee_node = capture_one(captures, "callee")
+        obj_node = capture_one(captures, "obj")
+        if call_node is None or callee_node is None:
+            continue
+        receiver = node_text(obj_node, source) if obj_node is not None else None
+
+        hint = None
+        if receiver is not None:
+            recv_var, recv_type = _enclosing_receiver(call_node, source)
+            if recv_var is not None and receiver == recv_var:
+                hint = recv_type
+
+        calls.append(CallSite(
+            callee=node_text(callee_node, source),
+            receiver=receiver,
+            receiver_type_hint=hint,
+            line=call_node.start_point.row + 1,
+            start_byte=call_node.start_byte,
+        ))
+    return calls
+
+
+def _enclosing_receiver(node, source: bytes) -> tuple[str | None, str | None]:
+    """(receiver var name, receiver type name) of the method containing
+    `node`, or (None, None) if we're not inside a method.
+
+    Called by: extract_calls() for selector calls only.
+    """
+    current = node.parent
+    while current is not None:
+        if current.type == "method_declaration":
+            recv = current.child_by_field_name("receiver")
+            if recv is None or recv.named_child_count == 0:
+                return None, None
+            param = recv.named_children[0]
+            name_node = param.child_by_field_name("name")
+            type_node = param.child_by_field_name("type")
+            var = node_text(name_node, source) if name_node is not None else None
+            typ = None
+            if type_node is not None:
+                typ = node_text(type_node, source).lstrip("*").split("[")[0].strip()
+            return var, typ
+        current = current.parent
+    return None, None
+
+
+def extract_imports(source: bytes, tree) -> list[ImportRecord]:
+    """Every import spec. The local name (what call sites use as `pkg.`) is
+    the alias if present, else the LAST path segment — which is a heuristic:
+    a package's name can differ from its directory, but rarely does.
+
+    Called by: indexer pass 2.
+    """
+    query = compile_query("go", IMPORT_QUERY)
+    records: list[ImportRecord] = []
+    for _pat, captures in query_matches(query, tree.root_node):
+        spec = capture_one(captures, "spec")
+        if spec is None:
+            continue
+        path_node = spec.child_by_field_name("path")
+        if path_node is None:
+            continue
+        path = node_text(path_node, source).strip('"')
+        name_node = spec.child_by_field_name("name")   # alias: `util "pkg/util"`
+        alias = node_text(name_node, source) if name_node is not None else path.split("/")[-1]
+        if alias in ("_", "."):
+            # blank/dot imports don't create a callable prefix; record for
+            # completeness but they resolve nothing.
+            alias = path.split("/")[-1]
+        records.append(ImportRecord(path, None, alias, spec.start_point.row + 1))
+    return records
 
 
 def _make(def_node, source: bytes, name: str, kind: str, *,

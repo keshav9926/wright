@@ -24,8 +24,8 @@ that makes an existing agent measurably better on a codebase it has never seen:
 |---|---|---|
 | **1** | **Symbol indexer** — walk, parse (tree-sitter), extract, store (SQLite). `wi index` / `wi symbols` / `wi stats` | ✅ **done** |
 | **2** | **Call graph** — import + call-site resolution with per-edge confidence, `wi callers` / `wi calls` / `wi refs` | ✅ **done** |
-| 3 | **Git history mining** — co-change coupling via association rules, `wi cochange`, `wi blast-radius`, `wi tests-for` | next |
-| 4 | **MCP server** — `find_symbol`, `callers`, `blast_radius`, `cochange`, `covering_tests`, `repo_map` as tools Claude Code calls | |
+| **3** | **Git history mining** — co-change via association rules (support/confidence/lift), `wi cochange` / `wi blast-radius` / `wi tests-for` / `wi hot` | ✅ **done** |
+| 4 | **MCP server** — `find_symbol`, `callers`, `blast_radius`, `cochange`, `covering_tests`, `repo_map` as tools Claude Code calls | next |
 | 5 | **Incremental reindex + benchmark** — content-hash invalidation; measured tokens-to-answer with vs. without the index | |
 
 Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-ROADMAP.md).
@@ -43,10 +43,18 @@ Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-R
 - Two-hop transitive callers via recursive CTE: **0.5ms**
 - Unprovable targets (interface dispatch, external packages) are stored as
   unresolved rather than guessed — a wrong edge poisons every downstream query
+- **2,128 co-change pairs mined from 1,400 commits** — `wi cochange ascend/device.go`
+  surfaces the other vendor backends (`mthreads`, `hygon`, `iluvatar`, `cambricon`) at
+  **17–25× lift with zero imports between them**: parallel implementations that move
+  in lockstep, invisible to any static analysis
 - Generated code auto-excluded; files with parse errors still yield intact symbols
-- 37/37 tests passing
-- The graph already earned its keep: an audit of this repo's device layer found a
-  nil-map panic, now [fixed upstream](https://github.com/Project-HAMi/HAMi/pull/2416)
+- 43/43 tests passing
+- The layers already earned their keep — twice. A manual audit of this repo's device
+  layer found a nil-map panic, now [fixed upstream](https://github.com/Project-HAMi/HAMi/pull/2416).
+  And the co-change table *retroactively predicts that exact find*: the same bug was
+  fixed in `mthreads` three days earlier, and `mthreads/device.go` is `ascend/device.go`'s
+  #2 co-change partner at 24.8×. The tool now automates the discovery that took the
+  audit an hour.
 
 ---
 
@@ -62,6 +70,10 @@ wi symbols path/to/repo --exported --no-tests        # public API surface only
 wi callers path/to/repo trimMemory --depth 2         # who calls this (transitive)
 wi calls  path/to/repo Devices.MutateAdmission       # what this calls, with proof
 wi refs   path/to/repo Fit                           # every call site, incl. unproven
+wi cochange path/to/repo device.go                   # what changes WITH this file
+wi blast-radius path/to/repo Devices.trimMemory      # callers + coupled files + tests
+wi tests-for path/to/repo compute                    # tests exercising a symbol
+wi hot    path/to/repo           # churn leaders + their main authors
 wi stats  path/to/repo           # what's in the index
 ```
 

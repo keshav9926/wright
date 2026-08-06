@@ -29,6 +29,7 @@ from pathlib import Path
 
 from .db import Database, db_path_for
 from .extract import CALL_EXTRACTORS, EXTRACTORS, IMPORT_EXTRACTORS
+from .history import mine_history
 from .parsers import get_parser
 from .resolver import Resolver
 from .walker import iter_source_files
@@ -56,6 +57,9 @@ class IndexResult:
     edges_resolved: int = 0                     # ... with a proven dst symbol
     import_count: int = 0
     edges_by_resolution: dict = field(default_factory=dict)
+    # Day 3 (pass 3) tallies:
+    commits_scanned: int = 0
+    cochange_pairs: int = 0
 
 
 def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
@@ -149,6 +153,13 @@ def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
                 res = row[5]                        # resolution tag
                 result.edges_by_resolution[res] = (
                     result.edges_by_resolution.get(res, 0) + 1)
+
+        # ================= PASS 3 — git history mining (Day 3) ============
+        # Optional by nature: a plain directory tree indexes fine, it just
+        # gets no co-change layer. Still inside the single transaction.
+        hist = mine_history(root, db)
+        result.commits_scanned = hist.commits_scanned
+        result.cochange_pairs = hist.pairs_stored
 
         result.seconds = time.perf_counter() - started
 

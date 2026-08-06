@@ -82,6 +82,12 @@ def index(
             f"({result.edges_resolved:,} resolved = {rate:.0f}%; {breakdown}); "
             f"{result.import_count:,} imports"
         )
+    # Day 3: history summary.
+    if result.commits_scanned:
+        console.print(
+            f"[green]{result.cochange_pairs:,} co-change pairs[/green] "
+            f"mined from {result.commits_scanned:,} commits"
+        )
     console.print(f"index db: {result.db_path}")
 
 
@@ -262,6 +268,146 @@ def refs(
     for r in rows:
         table.add_row(r["caller"], f"{r['caller_file']}:{r['line']}",
                       r["resolution"], f"{r['confidence']:.2f}")
+    console.print(table)
+    database.close()
+
+
+@app.command()
+def cochange(
+    repo: Path = typer.Argument(..., help="Repository path (locates its index DB)."),
+    file: str = typer.Argument(..., help="File path suffix, e.g. device.go"),
+    limit: int = typer.Option(20, "--limit"),
+    min_lift: float = typer.Option(2.0, "--min-lift",
+                                   help="Coupling threshold; 1.0 = chance level."),
+    db: Optional[Path] = typer.Option(None, "--db", help="Override index DB location."),
+) -> None:
+    """What else changes when FILE changes — mined from git history.
+
+    THE query grep cannot answer: the answer isn't in the code at all.
+    Calls Database.cochange_for().
+    """
+    database = _open_db(repo, db)
+    rows = database.cochange_for(file, limit=limit, min_lift=min_lift)
+    if not rows:
+        console.print(f"[yellow]no co-change partners[/yellow] above lift {min_lift} for {file}")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"files that change with '{file}'")
+    table.add_column("partner", style="bold")
+    table.add_column("together", justify="right")
+    table.add_column("P(partner|file)", justify="right")
+    table.add_column("lift", justify="right", style="cyan")
+    for r in rows:
+        table.add_row(r["partner"], str(r["both_count"]),
+                      f"{r['confidence']:.0%}", f"{r['lift']:.1f}x")
+    console.print(table)
+    database.close()
+
+
+@app.command(name="tests-for")
+def tests_for(
+    repo: Path = typer.Argument(..., help="Repository path (locates its index DB)."),
+    symbol: str = typer.Argument(..., help="Symbol name or qualified name."),
+    db: Optional[Path] = typer.Option(None, "--db", help="Override index DB location."),
+) -> None:
+    """Which tests actually exercise SYMBOL — via call edges from test files.
+
+    Calls Database.tests_for_symbol(). Evidence-based, not filename-guessed:
+    a test two dirs away that imports and calls the symbol still shows up.
+    """
+    database = _open_db(repo, db)
+    targets = database.find_symbols_by_name(symbol)
+    if not targets:
+        console.print(f"[yellow]no symbol named[/yellow] {symbol}")
+        raise typer.Exit(code=1)
+
+    for target in targets:
+        rows = database.tests_for_symbol(target["id"])
+        title = f"tests exercising {target['qualified_name']}"
+        if not rows:
+            console.print(f"{title}: [dim]none found via call edges[/dim]")
+            continue
+        table = Table(title=title)
+        table.add_column("test", style="bold")
+        table.add_column("file")
+        table.add_column("hops", justify="right")
+        for r in rows:
+            table.add_row(r["qualified_name"], r["file_path"], str(r["depth"]))
+        console.print(table)
+    database.close()
+
+
+@app.command(name="blast-radius")
+def blast_radius(
+    repo: Path = typer.Argument(..., help="Repository path (locates its index DB)."),
+    symbol: str = typer.Argument(..., help="Symbol name or qualified name."),
+    db: Optional[Path] = typer.Option(None, "--db", help="Override index DB location."),
+) -> None:
+    """Everything changing SYMBOL might affect — three evidence layers:
+
+    static callers (Day 2 graph) + historical co-change of its file (Day 3)
+    + tests that exercise it. The composed answer no single layer gives.
+    """
+    database = _open_db(repo, db)
+    targets = database.find_symbols_by_name(symbol)
+    if not targets:
+        console.print(f"[yellow]no symbol named[/yellow] {symbol}")
+        raise typer.Exit(code=1)
+
+    for target in targets:
+        console.print(f"\n[bold]blast radius of {target['qualified_name']}[/bold] "
+                      f"({target['file_path']}:{target['start_line']})")
+
+        callers = database.callers_of(target["id"], depth=2)
+        table = Table(title="static: transitive callers (2 hops)")
+        table.add_column("depth", justify="right")
+        table.add_column("caller", style="bold")
+        table.add_column("file")
+        for r in callers:
+            table.add_row(str(r["depth"]), r["qualified_name"], r["file_path"])
+        console.print(table if callers else "  static: no proven callers")
+
+        partners = database.cochange_for(target["file_path"], limit=10)
+        table = Table(title="historical: files that change with this one")
+        table.add_column("partner", style="bold")
+        table.add_column("together", justify="right")
+        table.add_column("lift", justify="right", style="cyan")
+        for r in partners:
+            table.add_row(r["partner"], str(r["both_count"]), f"{r['lift']:.1f}x")
+        console.print(table if partners else "  history: no coupled files above threshold")
+
+        tests = database.tests_for_symbol(target["id"])
+        table = Table(title="tests to run")
+        table.add_column("test", style="bold")
+        table.add_column("file")
+        for r in tests:
+            table.add_row(r["qualified_name"], r["file_path"])
+        console.print(table if tests else "  tests: none found via call edges")
+    database.close()
+
+
+@app.command()
+def hot(
+    repo: Path = typer.Argument(..., help="Repository path (locates its index DB)."),
+    limit: int = typer.Option(15, "--limit"),
+    db: Optional[Path] = typer.Option(None, "--db", help="Override index DB location."),
+) -> None:
+    """Most-churned files with their main authors — where the action is,
+    and who to talk to. Calls Database.hot_files()."""
+    database = _open_db(repo, db)
+    rows = database.hot_files(limit=limit)
+    if not rows:
+        console.print("[yellow]no history mined[/yellow] (not a git repo?)")
+        raise typer.Exit(code=1)
+
+    table = Table(title="hottest files (by commit count)")
+    table.add_column("file", style="bold")
+    table.add_column("commits", justify="right")
+    table.add_column("last touched")
+    table.add_column("top authors")
+    for r in rows:
+        table.add_row(r["path"], str(r["change_count"]),
+                      (r["last_changed"] or "")[:10], r["top_authors"])
     console.print(table)
     database.close()
 

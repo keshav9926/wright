@@ -86,6 +86,29 @@ CREATE TABLE IF NOT EXISTS imports (
     resolved_file_id INTEGER REFERENCES files(id) ON DELETE CASCADE
 );
 
+-- Day 3: mined from git history. Paths here are COMMIT paths, not files.id
+-- foreign keys, deliberately: co-change includes files we don't parse
+-- (.proto, .md, .yaml) — cross-artifact coupling is the whole point.
+CREATE TABLE IF NOT EXISTS cochange (
+    file_a     TEXT NOT NULL,      -- canonical order: file_a < file_b
+    file_b     TEXT NOT NULL,
+    both_count INTEGER NOT NULL,   -- commits touching both
+    a_count    INTEGER NOT NULL,   -- commits touching a at all
+    b_count    INTEGER NOT NULL,
+    support    REAL NOT NULL,      -- both / total commits
+    conf_ab    REAL NOT NULL,      -- P(b changes | a changed)
+    conf_ba    REAL NOT NULL,
+    lift       REAL NOT NULL,      -- >1 = coupled beyond chance; the ranker
+    PRIMARY KEY (file_a, file_b)
+);
+
+CREATE TABLE IF NOT EXISTS file_history (
+    path         TEXT PRIMARY KEY,
+    change_count INTEGER NOT NULL,
+    last_changed TEXT NOT NULL,    -- ISO date of most recent commit
+    top_authors  TEXT NOT NULL     -- "name (n); name (n); name (n)"
+);
+
 -- The lookups the CLI (and Day 4's MCP tools) actually run:
 CREATE INDEX IF NOT EXISTS idx_symbols_name  ON symbols(name);      -- wi symbols --name
 CREATE INDEX IF NOT EXISTS idx_symbols_file  ON symbols(file_id);   -- wi symbols --file
@@ -95,6 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_src     ON edges(src_symbol_id);  -- wi cal
 CREATE INDEX IF NOT EXISTS idx_edges_dst     ON edges(dst_symbol_id);  -- wi callers
 CREATE INDEX IF NOT EXISTS idx_edges_name    ON edges(dst_name);       -- wi refs
 CREATE INDEX IF NOT EXISTS idx_imports_file  ON imports(file_id);
+CREATE INDEX IF NOT EXISTS idx_cochange_b    ON cochange(file_b);  -- lookups hit either column
 """
 
 
@@ -187,6 +211,23 @@ class Database:
             " resolved_file_id) VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
+
+    def insert_cochange(self, rows: list[tuple]) -> None:
+        """Bulk insert co-change pairs. Row shape:
+        (file_a, file_b, both, a_count, b_count, support, conf_ab, conf_ba, lift).
+        Called by: history.mine_history()."""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO cochange (file_a, file_b, both_count,"
+            " a_count, b_count, support, conf_ab, conf_ba, lift)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+    def insert_file_history(self, rows: list[tuple]) -> None:
+        """Bulk insert per-file stats. Row shape:
+        (path, change_count, last_changed, top_authors).
+        Called by: history.mine_history()."""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO file_history (path, change_count,"
+            " last_changed, top_authors) VALUES (?, ?, ?, ?)", rows)
 
     def set_meta(self, key: str, value: str) -> None:
         """Upsert into meta (indexed_at, repo_root, commit sha, timings)."""
@@ -306,6 +347,57 @@ class Database:
             " JOIN files f ON f.id = src.file_id"
             " WHERE e.dst_name = ? ORDER BY f.path, e.line LIMIT ?",
             (name, limit),
+        ).fetchall()
+
+    def cochange_for(self, path_suffix: str, limit: int = 20,
+                     min_lift: float = 2.0) -> list[sqlite3.Row]:
+        """Files that historically change WITH this file, ranked by lift.
+
+        The min_lift=2 default filters 'changed together by coincidence'
+        (lift ~1). Suffix match on path, same UX as `wi symbols --file`.
+        Called by: cli.cochange() and blast_radius().
+        """
+        return self.conn.execute(
+            """
+            SELECT CASE WHEN file_a LIKE :p THEN file_b ELSE file_a END AS partner,
+                   both_count,
+                   CASE WHEN file_a LIKE :p THEN conf_ab ELSE conf_ba END AS confidence,
+                   lift
+            FROM cochange
+            WHERE (file_a LIKE :p OR file_b LIKE :p) AND lift >= :minlift
+            ORDER BY lift * both_count DESC
+            LIMIT :lim
+            """, {"p": f"%{path_suffix}", "minlift": min_lift, "lim": limit},
+        ).fetchall()
+
+    def tests_for_symbol(self, symbol_id: int) -> list[sqlite3.Row]:
+        """Tests that exercise this symbol, by the STRONGEST evidence we
+        have: call edges whose caller lives in a test file (direct or one
+        hop up). This is Days 1+2 composing: is_test flag x edge graph.
+        Called by: cli.tests_for() and blast_radius().
+        """
+        return self.conn.execute(
+            """
+            WITH RECURSIVE up(id, depth) AS (
+                SELECT ?, 0
+                UNION
+                SELECT e.src_symbol_id, up.depth + 1
+                FROM edges e JOIN up ON e.dst_symbol_id = up.id
+                WHERE up.depth < 2
+            )
+            SELECT DISTINCT s.qualified_name, f.path AS file_path, MIN(up.depth) AS depth
+            FROM up JOIN symbols s ON s.id = up.id
+                    JOIN files f ON f.id = s.file_id
+            WHERE up.depth > 0 AND f.is_test = 1
+            GROUP BY s.id ORDER BY depth, f.path
+            """, (symbol_id,),
+        ).fetchall()
+
+    def hot_files(self, limit: int = 15) -> list[sqlite3.Row]:
+        """Most-churned files — where a repo's action is. Called by cli.stats()."""
+        return self.conn.execute(
+            "SELECT path, change_count, last_changed, top_authors"
+            " FROM file_history ORDER BY change_count DESC LIMIT ?", (limit,),
         ).fetchall()
 
     def stats(self) -> dict:

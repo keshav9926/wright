@@ -25,8 +25,8 @@ that makes an existing agent measurably better on a codebase it has never seen:
 | **1** | **Symbol indexer** — walk, parse (tree-sitter), extract, store (SQLite). `wi index` / `wi symbols` / `wi stats` | ✅ **done** |
 | **2** | **Call graph** — import + call-site resolution with per-edge confidence, `wi callers` / `wi calls` / `wi refs` | ✅ **done** |
 | **3** | **Git history mining** — co-change via association rules (support/confidence/lift), `wi cochange` / `wi blast-radius` / `wi tests-for` / `wi hot` | ✅ **done** |
-| 4 | **MCP server** — `find_symbol`, `callers`, `blast_radius`, `cochange`, `covering_tests`, `repo_map` as tools Claude Code calls | next |
-| 5 | **Incremental reindex + benchmark** — content-hash invalidation; measured tokens-to-answer with vs. without the index | |
+| **4** | **MCP server** — 8 token-bounded tools (`find_symbol`, `callers`, `refs`, `blast_radius`, `cochange`, `covering_tests`, `hot_files`, `repo_map`) served over stdio; verified connected from Claude Code | ✅ **done** |
+| 5 | **Incremental reindex + benchmark** — content-hash invalidation; measured tokens-to-answer with vs. without the index | next |
 
 Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-ROADMAP.md).
 
@@ -79,6 +79,20 @@ wi stats  path/to/repo           # what's in the index
 
 The index lives in `~/.wright-index/<repo>-<hash>.db` — indexing someone else's
 checkout never dirties their `git status`.
+
+### Use it from Claude Code (MCP)
+
+```bash
+wi index /path/to/repo                                  # build the index once
+claude mcp add wright-index -- wi mcp /path/to/repo     # register the server
+```
+
+New sessions then get eight tools — `repo_map`, `find_symbol`, `callers`, `refs`,
+`blast_radius`, `cochange`, `covering_tests`, `hot_files`. Ask *"what breaks if I
+change trimMemory?"* and the agent calls `blast_radius` once instead of grepping
+for twelve turns. Every response is token-bounded by construction — a tool that
+dumps 40k tokens evicts the reasoning it was meant to inform. Tool descriptions
+are written as prompts: they tell the model *when* to prefer the index over grep.
 
 ---
 

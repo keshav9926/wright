@@ -412,6 +412,23 @@ def hot(
     database.close()
 
 
+@app.command()
+def mcp(
+    repo: Path = typer.Argument(Path("."), help="Repository whose index to serve."),
+) -> None:
+    """Serve this repo's index over MCP stdio — for Claude Code et al.
+
+    Register (project scope):
+        claude mcp add wright-index -- wi mcp <absolute-repo-path>
+    Import is deferred so `wi index` never pays the mcp SDK import cost.
+    """
+    from .mcp_server import run
+    if not repo.is_dir():
+        console.print(f"[red]not a directory:[/red] {repo}")
+        raise typer.Exit(code=1)
+    run(repo)
+
+
 def _open_db(repo: Path, db_override: Optional[Path]) -> Database:
     """Locate + open the index for a repo, with a friendly failure if the
     repo was never indexed.

@@ -106,6 +106,9 @@ def extract_calls(source: bytes, tree) -> list[CallSite]:
     """
     query = compile_query("go", CALL_QUERY)
     calls: list[CallSite] = []
+    # var->type maps computed lazily per enclosing function, cached by the
+    # function's byte span (nodes aren't hashable across queries).
+    var_cache: dict[tuple[int, int], dict[str, str]] = {}
     for _pat, captures in query_matches(query, tree.root_node):
         call_node = capture_one(captures, "call")
         callee_node = capture_one(captures, "callee")
@@ -119,6 +122,12 @@ def extract_calls(source: bytes, tree) -> list[CallSite]:
             recv_var, recv_type = _enclosing_receiver(call_node, source)
             if recv_var is not None and receiver == recv_var:
                 hint = recv_type
+            else:
+                # Second tree-proof: `dev := Devices{...}` earlier in the
+                # same function makes dev.Foo() a Devices method call. This
+                # is how table-driven tests call the code they test, so
+                # without it `wi tests-for` is blind on Go (found on HAMi).
+                hint = _local_var_type(call_node, receiver, source, var_cache)
 
         calls.append(CallSite(
             callee=node_text(callee_node, source),
@@ -152,6 +161,88 @@ def _enclosing_receiver(node, source: bytes) -> tuple[str | None, str | None]:
             return var, typ
         current = current.parent
     return None, None
+
+
+def _local_var_type(call_node, var_name: str, source: bytes,
+                    cache: dict[tuple[int, int], dict[str, str]]) -> str | None:
+    """Type of a function-local variable, when the declaration proves it:
+
+        dev := Devices{...}          -> "Devices"
+        cfg := &VNPUConfig{...}      -> "VNPUConfig"   (pointer stripped)
+        var s Server                 -> "Server"
+        var s = Server{...}          -> "Server"
+
+    Deliberately NOT handled: `x := NewFoo()` (needs return-type lookup),
+    reassignment, multi-var `a, b := X{}, Y{}` — heuristic stays where the
+    tree alone is proof. Shadowing in nested blocks is an accepted
+    over-approximation.
+
+    Called by: extract_calls() for selector calls whose operand is not the
+    method receiver. The per-function map is cached by byte span so a
+    function with 50 calls scans its declarations once.
+    """
+    func = call_node.parent
+    while func is not None and func.type not in (
+            "function_declaration", "method_declaration", "func_literal"):
+        func = func.parent
+    if func is None:
+        return None
+
+    key = (func.start_byte, func.end_byte)
+    if key not in cache:
+        cache[key] = _collect_var_types(func, source)
+    return cache[key].get(var_name)
+
+
+def _collect_var_types(func_node, source: bytes) -> dict[str, str]:
+    """Scan one function's subtree for provable var declarations.
+    Called by: _local_var_type() on cache miss."""
+    types: dict[str, str] = {}
+    stack = list(func_node.named_children)
+    while stack:
+        n = stack.pop()
+        if n.type == "short_var_declaration":       # x := <value>
+            left = n.child_by_field_name("left")
+            right = n.child_by_field_name("right")
+            if (left is not None and right is not None
+                    and left.named_child_count == 1 and right.named_child_count == 1
+                    and left.named_children[0].type == "identifier"):
+                typ = _literal_type(right.named_children[0], source)
+                if typ:
+                    types[node_text(left.named_children[0], source)] = typ
+        elif n.type == "var_spec":                  # var x T / var x = T{...}
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                type_node = n.child_by_field_name("type")
+                typ = None
+                if type_node is not None:
+                    typ = _bare_type_name(node_text(type_node, source))
+                else:
+                    value = n.child_by_field_name("value")
+                    if value is not None and value.named_child_count == 1:
+                        typ = _literal_type(value.named_children[0], source)
+                if typ:
+                    types[node_text(name_node, source)] = typ
+        stack.extend(n.named_children)
+    return types
+
+
+def _literal_type(value_node, source: bytes) -> str | None:
+    """Type name out of `T{...}` or `&T{...}`, else None."""
+    if value_node.type == "unary_expression":       # &T{...}
+        operand = value_node.child_by_field_name("operand")
+        if operand is not None:
+            value_node = operand
+    if value_node.type == "composite_literal":
+        type_node = value_node.child_by_field_name("type")
+        if type_node is not None:
+            return _bare_type_name(node_text(type_node, source))
+    return None
+
+
+def _bare_type_name(text: str) -> str:
+    """'*pkg.Device[T]' -> 'Device': strip pointer, generics, package."""
+    return text.lstrip("*&").split("[")[0].split(".")[-1].strip()
 
 
 def extract_imports(source: bytes, tree) -> list[ImportRecord]:

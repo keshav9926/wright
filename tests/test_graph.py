@@ -101,6 +101,16 @@ GO_REPO = {
         "}\n\n"
         "func (s *Server) prep(x int) int { return x }\n"
     ),
+    "pkg/api/api_test.go": (
+        "package api\n\n"
+        "import \"testing\"\n\n"
+        "func TestHandle(t *testing.T) {\n"
+        "\tsrv := &Server{}\n"                # local var, type from literal
+        "\tif srv.Handle(1) != 1 {\n"
+        "\t\tt.Fatal(\"bad\")\n"
+        "\t}\n"
+        "}\n"
+    ),
 }
 
 
@@ -118,6 +128,21 @@ def test_go_ladder(tmp_path: Path):
     # store.Save(): import path traced through go.mod module prefix
     e = _edge(db, "Server.Handle", "Save")
     assert e["resolution"] == "import" and e["dst_qualified"] == "Save"
+    db.close()
+
+
+def test_go_local_var_receiver_and_tests_for(tmp_path: Path):
+    """`srv := &Server{}` in a test proves srv.Handle -> Server.Handle,
+    which is exactly what makes `wi tests-for` see Go table tests."""
+    db = _index(tmp_path, GO_REPO)
+
+    e = _edge(db, "TestHandle", "Handle")
+    assert e["resolution"] == "receiver" and e["dst_qualified"] == "Server.Handle"
+
+    target = db.find_symbols_by_name("Server.Handle")[0]
+    tests = db.tests_for_symbol(target["id"])
+    assert [t["qualified_name"] for t in tests] == ["TestHandle"]
+    assert tests[0]["file_path"] == "pkg/api/api_test.go"
     db.close()
 
 

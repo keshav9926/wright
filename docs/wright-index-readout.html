@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wright-index — reading globstar</title>
+<style>
+    *, *::before, *::after { box-sizing: border-box; }
+    * { margin: 0; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { min-height: 100vh; }
+    img, picture, video, canvas, svg { display: block; max-width: 100%; }
+    input, button, textarea, select { font: inherit; }
+    p, h1, h2, h3, h4, h5, h6 { overflow-wrap: break-word; }
+</style>
+<style>
+  :root {
+    --ground:      #F4F5F7;
+    --panel:       #FFFFFF;
+    --panel-2:     #ECEEF2;
+    --ink:         #171A21;
+    --ink-soft:    #4A5060;
+    --ink-faint:   #7A8090;
+    --rule:        #DCDFE6;
+    --accent:      #C97B1E;
+    --proof-hi:    #1F7D69;
+    --proof-mid:   #A8871B;
+    --proof-none:  #9AA0AE;
+    --grid:        rgba(23,26,33,.06);
+    --shadow:      0 1px 2px rgba(23,26,33,.06), 0 8px 24px -12px rgba(23,26,33,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:     #101319;
+      --panel:      #171B23;
+      --panel-2:    #1E232D;
+      --ink:        #E6E9F0;
+      --ink-soft:   #A7AEBE;
+      --ink-faint:  #767D8D;
+      --rule:       #2A303C;
+      --accent:     #E4933A;
+      --proof-hi:   #3FB89C;
+      --proof-mid:  #D4B23C;
+      --proof-none: #6B7385;
+      --grid:       rgba(230,233,240,.05);
+      --shadow:     0 1px 2px rgba(0,0,0,.4), 0 12px 32px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #F4F5F7; --panel: #FFFFFF; --panel-2: #ECEEF2;
+    --ink: #171A21; --ink-soft: #4A5060; --ink-faint: #7A8090; --rule: #DCDFE6;
+    --accent: #C97B1E; --proof-hi: #1F7D69; --proof-mid: #A8871B; --proof-none: #9AA0AE;
+    --grid: rgba(23,26,33,.06);
+    --shadow: 0 1px 2px rgba(23,26,33,.06), 0 8px 24px -12px rgba(23,26,33,.18);
+  }
+  :root[data-theme="dark"] {
+    --ground: #101319; --panel: #171B23; --panel-2: #1E232D;
+    --ink: #E6E9F0; --ink-soft: #A7AEBE; --ink-faint: #767D8D; --rule: #2A303C;
+    --accent: #E4933A; --proof-hi: #3FB89C; --proof-mid: #D4B23C; --proof-none: #6B7385;
+    --grid: rgba(230,233,240,.05);
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -14px rgba(0,0,0,.7);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
+
+  /* ── masthead ─────────────────────────────────────────────── */
+  .mast {
+    padding: 72px 0 40px;
+    border-bottom: 1px solid var(--rule);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: -1px -1px;
+  }
+  .eyebrow {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 20px;
+  }
+  h1 {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: clamp(30px, 5.4vw, 54px);
+    letter-spacing: -.035em; line-height: 1.02; font-weight: 600;
+    text-wrap: balance; margin-bottom: 20px;
+  }
+  h1 .dim { color: var(--ink-faint); }
+  .standfirst {
+    font-size: 18px; color: var(--ink-soft); max-width: 60ch; text-wrap: pretty;
+  }
+
+  /* ── section furniture ────────────────────────────────────── */
+  section { padding-top: 64px; }
+  .label {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-faint); display: flex; align-items: center; gap: 12px;
+    margin-bottom: 18px;
+  }
+  .label::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  h2 {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: clamp(20px, 2.6vw, 27px); letter-spacing: -.025em; font-weight: 600;
+    margin-bottom: 12px; text-wrap: balance;
+  }
+  .lede { color: var(--ink-soft); max-width: 66ch; margin-bottom: 28px; text-wrap: pretty; }
+  .note { color: var(--ink-soft); max-width: 66ch; font-size: 15px; }
+
+  /* ── pipeline ─────────────────────────────────────────────── */
+  .pipe { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); }
+  .stage {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 20px; position: relative; overflow: hidden;
+  }
+  .stage::before {
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--accent);
+  }
+  .stage .tier {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px; letter-spacing: .14em; color: var(--accent); text-transform: uppercase;
+  }
+  .stage h3 {
+    font-size: 15px; font-weight: 650; margin: 6px 0 8px; letter-spacing: -.01em;
+  }
+  .stage p { font-size: 13.5px; color: var(--ink-soft); line-height: 1.5; }
+  .stage .out {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--rule);
+    font-size: 20px; letter-spacing: -.02em; font-weight: 600;
+  }
+  .stage .out span { font-size: 12px; color: var(--ink-faint); font-weight: 400; letter-spacing: 0; }
+
+  /* ── proof ladder ─────────────────────────────────────────── */
+  .ladder { display: flex; flex-direction: column; gap: 2px; margin-bottom: 24px; }
+  .rung {
+    display: grid; grid-template-columns: 108px 1fr 74px 52px;
+    align-items: center; gap: 14px;
+    padding: 9px 12px; background: var(--panel); border: 1px solid var(--rule);
+  }
+  .rung:first-child { border-radius: 3px 3px 0 0; }
+  .rung:last-child { border-radius: 0 0 3px 3px; }
+  .rung + .rung { border-top: none; }
+  .rung .name {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; letter-spacing: -.01em;
+  }
+  .bar { height: 13px; border-radius: 1px; min-width: 2px; }
+  .rung .n, .rung .c {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums; font-size: 12.5px; text-align: right;
+  }
+  .rung .c { color: var(--ink-faint); }
+  .t-hi   { background: var(--proof-hi); }
+  .t-mid  { background: var(--proof-mid); }
+  .t-none { background: var(--proof-none); }
+  .n-hi { color: var(--proof-hi); } .n-mid { color: var(--proof-mid); } .n-none { color: var(--ink-faint); }
+
+  .callout {
+    border-left: 2px solid var(--accent); padding: 4px 0 4px 18px;
+    color: var(--ink-soft); max-width: 64ch; font-size: 15px; text-wrap: pretty;
+  }
+  .callout strong { color: var(--ink); font-weight: 620; }
+
+  /* ── query panels ─────────────────────────────────────────── */
+  .queries { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .q {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden;
+  }
+  .q .cmd {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; padding: 12px 16px; background: var(--panel-2);
+    border-bottom: 1px solid var(--rule); overflow-x: auto; white-space: nowrap;
+  }
+  .q .cmd b { color: var(--accent); font-weight: 600; }
+  .q .body { padding: 14px 16px; }
+  .q .ask { font-size: 13px; color: var(--ink-faint); margin-bottom: 10px; font-style: italic; }
+  .rows { display: flex; flex-direction: column; gap: 6px; }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; font-variant-numeric: tabular-nums;
+    padding-bottom: 6px; border-bottom: 1px dotted var(--rule);
+  }
+  .row:last-child { border-bottom: none; padding-bottom: 0; }
+  .row .k { color: var(--ink); overflow-wrap: anywhere; }
+  .row .v { color: var(--ink-faint); white-space: nowrap; }
+  .row .v.hi { color: var(--proof-hi); }
+  .row .v.acc { color: var(--accent); }
+
+  /* ── finding ──────────────────────────────────────────────── */
+  .finding {
+    background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 26px; box-shadow: var(--shadow);
+  }
+  pre {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    background: var(--panel-2); border: 1px solid var(--rule); border-radius: 2px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.65;
+    margin: 14px 0;
+  }
+  pre .bad { color: var(--accent); font-weight: 600; }
+  pre .cm  { color: var(--ink-faint); }
+  code {
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: .9em; background: var(--panel-2); padding: 1px 5px;
+    border-radius: 2px; border: 1px solid var(--rule);
+  }
+  .finding ul { margin: 14px 0 0 18px; color: var(--ink-soft); }
+  .finding li { margin-bottom: 7px; }
+
+  footer {
+    margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px; color: var(--ink-faint);
+    display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
+</head>
+<body>
+
+
+<div class="mast">
+  <div class="wrap">
+    <div class="eyebrow">wright-index · v0.5.0 · readout</div>
+    <h1>Everything it knows<br><span class="dim">about a repo it met<br>ninety seconds ago.</span></h1>
+    <p class="standfirst">
+      Point it at a codebase. It parses every file, resolves every call it can
+      <em>prove</em>, and mines the commit history for coupling that exists in no
+      import graph. Below is the real readout for <strong>DeepSourceCorp/globstar</strong>
+      — 105 files, indexed cold.
+    </p>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section>
+    <div class="label">Three passes over the tree</div>
+    <h2>Parse, then prove, then remember</h2>
+    <p class="lede">
+      Each pass writes to one SQLite file. No compiler, no language server, no build
+      environment — tree-sitter reads text, so a repo cloned sixty seconds ago parses
+      exactly as well as one you've built.
+    </p>
+    <div class="pipe">
+      <div class="stage">
+        <div class="tier">Layer L0–L2 · syntactic</div>
+        <h3>Read the shapes</h3>
+        <p>Walk, classify, skip vendored and generated files, parse to a concrete syntax tree, extract every definition with its byte range.</p>
+        <div class="out">359 <span>symbols</span></div>
+      </div>
+      <div class="stage">
+        <div class="tier">Layer L3 · structural</div>
+        <h3>Prove the edges</h3>
+        <p>Find every call site, then try to prove its target through a ladder of evidence. Unprovable targets are recorded as unproven, never guessed.</p>
+        <div class="out">2,933 <span>call sites</span></div>
+      </div>
+      <div class="stage">
+        <div class="tier">Layer L6 · historical</div>
+        <h3>Mine the past</h3>
+        <p>Read 178 commits as baskets. Score which files move together beyond chance — coupling that no parser can see, because it isn't in the code.</p>
+        <div class="out">137 <span>coupled pairs</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="label">The thesis</div>
+    <h2>An edge is only as good as its proof</h2>
+    <p class="lede">
+      Call resolution is undecidable in the general case, so the honest move is to grade it.
+      Every edge carries how it was proven. Here is how globstar's 2,933 call sites actually
+      landed.
+    </p>
+
+    <div class="ladder">
+      <div class="rung">
+        <span class="name">receiver</span>
+        <span class="bar t-hi" style="width:1.5%"></span>
+        <span class="n n-hi">37</span><span class="c">0.95</span>
+      </div>
+      <div class="rung">
+        <span class="name">package</span>
+        <span class="bar t-hi" style="width:10.7%"></span>
+        <span class="n n-hi">259</span><span class="c">0.95</span>
+      </div>
+      <div class="rung">
+        <span class="name">import</span>
+        <span class="bar t-hi" style="width:4%"></span>
+        <span class="n n-hi">96</span><span class="c">0.90</span>
+      </div>
+      <div class="rung">
+        <span class="name">same_file</span>
+        <span class="bar t-hi" style="width:.5%"></span>
+        <span class="n n-hi">2</span><span class="c">0.90</span>
+      </div>
+      <div class="rung">
+        <span class="name">name_only</span>
+        <span class="bar t-mid" style="width:4.7%"></span>
+        <span class="n n-mid">115</span><span class="c">0.50</span>
+      </div>
+      <div class="rung">
+        <span class="name">unresolved</span>
+        <span class="bar t-none" style="width:100%"></span>
+        <span class="n n-none">2,424</span><span class="c">0.00</span>
+      </div>
+    </div>
+
+    <p class="callout">
+      That 2,424 is not a failure — it is the point. Almost all of it is calls into
+      <code>tree-sitter</code>, <code>fmt</code> and the standard library, which are
+      genuinely outside this repo's graph. <strong>A missing edge under-reports; a
+      wrong edge poisons every query built on top of it.</strong> So the tool marks
+      what it cannot prove and moves on.
+    </p>
+  </section>
+
+  <section>
+    <div class="label">Questions grep cannot answer</div>
+    <h2>What you actually ask it</h2>
+    <p class="lede">
+      Four real queries against the globstar index, with their real answers. None of
+      these are text search — each one needs structure or history that only exists
+      after indexing.
+    </p>
+
+    <div class="queries">
+
+      <div class="q">
+        <div class="cmd"><b>wi callers</b> globstar scanDecl</div>
+        <div class="body">
+          <p class="ask">Who calls this function — proven, not name-matched?</p>
+          <div class="rows">
+            <div class="row"><span class="k">TsScopeBuilder.scanDecl</span><span class="v hi">recursive ×5</span></div>
+            <div class="row"><span class="k">TsScopeBuilder.CollectVariables</span><span class="v hi">L147, L151</span></div>
+            <div class="row"><span class="k">— all proven by receiver type</span><span class="v hi">0.95</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="q">
+        <div class="cmd"><b>wi cochange</b> globstar checkers/checker.go</div>
+        <div class="body">
+          <p class="ask">What else changes when I touch this file?</p>
+          <div class="rows">
+            <div class="row"><span class="k">analysis/language.go</span><span class="v acc">9.9× lift</span></div>
+            <div class="row"><span class="k">cmd/globstar/main.go</span><span class="v acc">7.9×</span></div>
+            <div class="row"><span class="k">pkg/cli/test_runner.go</span><span class="v acc">6.6×</span></div>
+            <div class="row"><span class="k">checkers/javascript/no_double_eq.go</span><span class="v acc">9.9×</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="q">
+        <div class="cmd"><b>wi symbols</b> globstar --kind interface</div>
+        <div class="body">
+          <p class="ask">What are this project's extension points?</p>
+          <div class="rows">
+            <div class="row"><span class="k">ScopeBuilder</span><span class="v">analysis/scope.go:51</span></div>
+            <div class="row"><span class="k">Walker</span><span class="v">analysis/walk.go:11</span></div>
+            <div class="row"><span class="k">— exactly two, in a 10.5k-line repo</span><span class="v"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="q">
+        <div class="cmd"><b>wi hot</b> globstar</div>
+        <div class="body">
+          <p class="ask">Where is the action, and who do I talk to?</p>
+          <div class="rows">
+            <div class="row"><span class="k">pkg/cli/cli.go</span><span class="v">18 · Sourya V.</span></div>
+            <div class="row"><span class="k">checkers/checker.go</span><span class="v">18 · Maharshi B.</span></div>
+            <div class="row"><span class="k">pkg/analysis/pattern_rule.go</span><span class="v">9 · Sourya V.</span></div>
+            <div class="row"><span class="k">cmd/one/main.go</span><span class="v">8 · injuly</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="label">What the readout led to</div>
+    <h2>Two interfaces, and a bug behind one of them</h2>
+    <div class="finding">
+      <p class="note">
+        <code>wi symbols --kind interface</code> said globstar has exactly two extension
+        points, and <code>ScopeBuilder</code> is the one that matters for anything
+        needing to know what a name refers to. Reading the scope tree it builds turned
+        up a one-line inversion in <code>analysis/scope.go</code>:
+      </p>
+
+<pre><span class="cm">// Scope.AstNode is documented as:
+//   "the AST node that introduces this scope into the scope tree"</span>
+
+nextScope := scope
+if builder.NodeCreatesScope(node) {
+    nextScope = NewScope(scope)
+    scopeOfNode[node] = nextScope
+    if scope != nil {
+        scope.Children = append(scope.Children, nextScope)
+        <span class="bad">scope.AstNode = node</span>   <span class="cm">// ← sets the PARENT's node</span>
+    }
+}</pre>
+
+      <p class="note">
+        The new scope's own <code>AstNode</code> is never assigned, so it stays
+        <code>nil</code> for every scope in the tree. Meanwhile the parent's gets
+        overwritten by whichever scope-creating child happens to be visited last.
+      </p>
+      <ul>
+        <li>Every non-root scope reports <code>AstNode == nil</code></li>
+        <li>A function scope ends up pointing at its own body block</li>
+        <li>A block with two sibling scopes keeps only the second</li>
+      </ul>
+      <p class="note" style="margin-top:16px">
+        It's latent today — nothing in-tree reads the field yet — but it is a public
+        field on a public type, documented with a meaning it does not have. The fix is
+        one line: assign <code>nextScope.AstNode</code>, not <code>scope.AstNode</code>.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span>wright-index v0.5.0 · 105 files · 359 symbols · 2,933 edges · 137 pairs</span>
+    <span>subject: DeepSourceCorp/globstar @ main · indexed 2026-08-07</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

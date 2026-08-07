@@ -30,6 +30,12 @@ that makes an existing agent measurably better on a codebase it has never seen:
 
 Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-ROADMAP.md).
 
+**See it read a repository it has never met**:
+[docs/wright-index-readout.html](docs/wright-index-readout.html) — a self-contained page
+showing the three passes, the proof ladder, and four real queries, built entirely from
+indexing [DeepSourceCorp/globstar](https://github.com/DeepSourceCorp/globstar) cold.
+The scope bug it surfaced is now [globstar#235](https://github.com/DeepSourceCorp/globstar/pull/235).
+
 **Verified against a real repo** — [HAMi](https://github.com/Project-HAMi/HAMi)
 (CNCF, ~170 Go files, 69k lines):
 

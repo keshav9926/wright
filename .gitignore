@@ -5,6 +5,9 @@ work/
 scout/
 PHASE*-EXPLAIN.md
 
+# Raw benchmark transcripts (full agent session dumps) — results.md is committed
+bench/raw/
+
 # Python
 __pycache__/
 *.py[cod]

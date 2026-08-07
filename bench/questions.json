@@ -1,0 +1,26 @@
+[
+  {
+    "id": "callers-tests",
+    "q": "Who calls Devices.trimMemory in the ascend backend, and which tests cover it? Be precise and cite files."
+  },
+  {
+    "id": "blast-radius",
+    "q": "I want to modify pkg/device/ascend/device.go. What other files should I check or expect to touch, and why?"
+  },
+  {
+    "id": "interface-impls",
+    "q": "How many implementations of the Fit method exist in this repo, and in which files? List them."
+  },
+  {
+    "id": "kunlun-impact",
+    "q": "What breaks if I change KunlunVDevices.trimMemory? Callers, coupled files, tests."
+  },
+  {
+    "id": "hot-owners",
+    "q": "Which source files in this repo change most frequently, and who are their main authors?"
+  },
+  {
+    "id": "repo-orientation",
+    "q": "Give me a quick structural orientation of this repository: languages, where the core logic lives, most active areas."
+  }
+]

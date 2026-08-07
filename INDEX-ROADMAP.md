@@ -1,5 +1,12 @@
 # wright-index — 5-Day Build Plan
 
+> **Status (2026-08-07): Days 1–5 shipped.** Symbols, call graph, history
+> mining, MCP server (verified from Claude Code), incremental reindex — all
+> live; current numbers in [README.md](README.md), benchmark in
+> [bench/](bench/). This document is the original plan, kept as written;
+> deviations (pygit2→git CLI, hand-rolled JSON-RPC→mcp SDK) are argued in
+> the code where they happened.
+
 A code intelligence server. It indexes a repository once and answers questions about it
 that no amount of grepping can answer — then serves those answers to Claude Code over MCP.
 

@@ -26,7 +26,7 @@ that makes an existing agent measurably better on a codebase it has never seen:
 | **2** | **Call graph** — import + call-site resolution with per-edge confidence, `wi callers` / `wi calls` / `wi refs` | ✅ **done** |
 | **3** | **Git history mining** — co-change via association rules (support/confidence/lift), `wi cochange` / `wi blast-radius` / `wi tests-for` / `wi hot` | ✅ **done** |
 | **4** | **MCP server** — 8 token-bounded tools (`find_symbol`, `callers`, `refs`, `blast_radius`, `cochange`, `covering_tests`, `hot_files`, `repo_map`) served over stdio; verified connected from Claude Code | ✅ **done** |
-| 5 | **Incremental reindex + benchmark** — content-hash invalidation; measured tokens-to-answer with vs. without the index | next |
+| **5** | **Incremental reindex + benchmark** — content-hash invalidation with dependent re-resolution (0.64s single-file on HAMi); measured tokens-to-answer, [results](bench/results.md) | ✅ **done** |
 
 Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-ROADMAP.md).
 
@@ -47,8 +47,15 @@ Full plan with per-day scope, LOC, and demo criteria: [INDEX-ROADMAP.md](INDEX-R
   surfaces the other vendor backends (`mthreads`, `hygon`, `iluvatar`, `cambricon`) at
   **17–25× lift with zero imports between them**: parallel implementations that move
   in lockstep, invisible to any static analysis
+- **Measured, not claimed** ([bench/results.md](bench/results.md)): same six questions
+  through headless Claude Code with and without the index — **33% fewer turns
+  overall, up to 2.3× fewer tokens** on call-graph questions, honest parity where
+  grep was already the right tool (two cells show the index losing, reasons stated)
+- **Incremental reindex**: touch one file → 0.64s (unchanged files hash-skipped;
+  dependents re-resolved, including `name_only` edges whose uniqueness assumption
+  the change broke)
 - Generated code auto-excluded; files with parse errors still yield intact symbols
-- 43/43 tests passing
+- 57/57 tests passing
 - The layers already earned their keep — twice. A manual audit of this repo's device
   layer found a nil-map panic, now [fixed upstream](https://github.com/Project-HAMi/HAMi/pull/2416).
   And the co-change table *retroactively predicts that exact find*: the same bug was

@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .db import Database, db_path_for
-from .indexer import index_repository
+from .indexer import reindex
 
 app = typer.Typer(
     name="wi",
@@ -35,17 +35,33 @@ console = Console()
 def index(
     repo: Path = typer.Argument(..., help="Path to the repository to index."),
     db: Optional[Path] = typer.Option(None, "--db", help="Override index DB location."),
+    full: bool = typer.Option(False, "--full",
+                              help="Force full rebuild (default: incremental when an index exists)."),
 ) -> None:
-    """Index REPO from scratch: walk -> parse -> extract -> store.
+    """Index REPO — incrementally when possible (Day 5), else from scratch.
 
-    Calls indexer.index_repository() and renders its IndexResult.
+    Calls indexer.reindex() and renders its IndexResult.
     """
     if not repo.is_dir():
         console.print(f"[red]not a directory:[/red] {repo}")
         raise typer.Exit(code=1)
 
     with console.status(f"indexing {repo.resolve().name}..."):
-        result = index_repository(repo, db_path=db)
+        result = reindex(repo, db_path=db, full=full)
+
+    if result.mode == "incremental":
+        console.print(
+            f"[bold]incremental:[/bold] {result.files_unchanged:,} unchanged "
+            f"(hash-skipped), {result.files_indexed:,} reparsed, "
+            f"{result.dependents_reresolved:,} dependents re-resolved, "
+            f"{result.symbol_count:,} symbols + {result.edge_count:,} edges rebuilt "
+            f"in [bold]{result.seconds:.2f}s[/bold]"
+        )
+        if result.cochange_pairs:
+            console.print(f"history refreshed: {result.cochange_pairs:,} pairs "
+                          f"from {result.commits_scanned:,} commits")
+        console.print(f"index db: {result.db_path}")
+        return
 
     # ---- files table -----------------------------------------------------
     files_table = Table(title=f"indexed {result.repo_root.name}")

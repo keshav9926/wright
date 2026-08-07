@@ -60,6 +60,12 @@ class IndexResult:
     # Day 3 (pass 3) tallies:
     commits_scanned: int = 0
     cochange_pairs: int = 0
+    # Day 5 (incremental) tallies:
+    mode: str = "full"                          # "full" | "incremental"
+    files_unchanged: int = 0                    # skipped via content hash
+    dependents_reresolved: int = 0              # unchanged files re-resolved
+                                                # because their edges pointed
+                                                # into changed files
 
 
 def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
@@ -173,6 +179,198 @@ def index_repository(root: Path, db_path: Path | None = None) -> IndexResult:
             db.set_meta("commit_sha", commit_sha)
 
         db.commit()   # the single fsync
+    finally:
+        db.close()
+
+    return result
+
+
+def reindex(root: Path, db_path: Path | None = None, full: bool = False) -> IndexResult:
+    """Smart entry point: incremental when an index exists, full otherwise.
+
+    Called by: cli.index(). `full=True` forces the rebuild path.
+    """
+    root = Path(root).resolve()
+    db_path = db_path or db_path_for(root)
+    if full or not db_path.exists():
+        return index_repository(root, db_path=db_path)
+    return reindex_incremental(root, db_path)
+
+
+def reindex_incremental(root: Path, db_path: Path) -> IndexResult:
+    """Day 5 — reindex ONLY what changed, by content hash.
+
+    The contract Day 1 set up finally pays off: every file row carries a
+    sha256. Diff stored hashes against the working tree, then:
+
+        unchanged  -> skip entirely (the common case: ~everything)
+        changed    -> delete row (CASCADE wipes its symbols; edge CASCADE
+                      wipes edges in AND out), re-parse, re-insert
+        new        -> parse, insert
+        deleted    -> delete row, cascades do the rest
+
+    The subtle part is DEPENDENTS: an unchanged file whose edges pointed
+    into a changed file just lost those edges to the cascade — and the
+    symbol it called may have moved or vanished. So before deleting we
+    record who pointed in (plus who IMPORTED the changed files, plus any
+    edge whose dst_name matches a symbol name the change added/removed —
+    that last one catches name_only edges whose uniqueness assumption
+    the change may have broken), and re-run pass 2 for exactly those files.
+
+    Called by: reindex(). Same single-transaction discipline as full runs.
+    """
+    root = Path(root).resolve()
+    db = Database(db_path, fresh=False)
+    result = IndexResult(repo_root=root, db_path=db_path, mode="incremental")
+    started = time.perf_counter()
+
+    try:
+        # ---- diff the working tree against stored hashes ----------------
+        stored = {row["path"]: (row["id"], row["content_hash"])
+                  for row in db.conn.execute("SELECT id, path, content_hash FROM files")}
+
+        current: dict[str, object] = {}
+        for sf in iter_source_files(root):
+            current[sf.rel_path] = sf
+
+        changed_paths = [p for p, sf in current.items()
+                         if p in stored and stored[p][1] != sf.content_hash]
+        new_paths = [p for p in current if p not in stored]
+        deleted_paths = [p for p in stored if p not in current]
+        touched_ids = [stored[p][0] for p in changed_paths + deleted_paths]
+
+        result.files_unchanged = len(current) - len(changed_paths) - len(new_paths)
+
+        head = _git_head(root)
+        if not changed_paths and not new_paths and not deleted_paths:
+            # fast path: tree identical; refresh history only if HEAD moved
+            if head and head != db.get_meta("commit_sha"):
+                hist = mine_history(root, db)
+                result.commits_scanned = hist.commits_scanned
+                result.cochange_pairs = hist.pairs_stored
+                db.set_meta("commit_sha", head)
+                db.commit()
+            result.seconds = time.perf_counter() - started
+            return result
+
+        # ---- names defined by soon-to-be-deleted symbols. Only the
+        # SYMMETRIC DIFFERENCE vs the re-parsed names can flip a name-based
+        # resolution elsewhere — a name that exists identically before and
+        # after changes nothing for other files. (First cut used ALL names
+        # in the changed file: touching a comment in HAMi's device.go then
+        # re-resolved 34 files for 8s. Added/removed only -> ~2s.)
+        old_names: set[str] = set()
+        placeholders = ",".join("?" * len(touched_ids)) or "NULL"
+        if touched_ids:
+            for row in db.conn.execute(
+                    f"SELECT DISTINCT name FROM symbols WHERE file_id IN ({placeholders})",
+                    touched_ids):
+                old_names.add(row["name"])
+
+        # ---- dependents, recorded BEFORE the cascade erases the evidence
+        dependent_ids: set[int] = set()
+        if touched_ids:
+            for row in db.conn.execute(
+                    f"""SELECT DISTINCT s.file_id AS fid FROM edges e
+                        JOIN symbols s ON s.id = e.src_symbol_id
+                        WHERE e.dst_symbol_id IN (
+                            SELECT id FROM symbols WHERE file_id IN ({placeholders}))""",
+                    touched_ids):
+                dependent_ids.add(row["fid"])
+            for row in db.conn.execute(
+                    f"SELECT DISTINCT file_id AS fid FROM imports"
+                    f" WHERE resolved_file_id IN ({placeholders})", touched_ids):
+                dependent_ids.add(row["fid"])
+
+        # ---- apply deletions (CASCADE: symbols, edges both ends, imports)
+        if touched_ids:
+            db.conn.execute(
+                f"DELETE FROM files WHERE id IN ({placeholders})", touched_ids)
+        dependent_ids -= set(touched_ids)
+
+        # ---- pass 1 for changed+new files --------------------------------
+        new_names: set[str] = set()
+        reparse: list[tuple[int, Path, str]] = []
+        for path in changed_paths + new_paths:
+            sf = current[path]
+            if sf.skipped_reason is not None:
+                db.insert_file(sf, parse_ok=True)
+                result.files_skipped += 1
+                continue
+            tree = get_parser(sf.language).parse(sf.content)
+            parse_ok = not tree.root_node.has_error
+            if not parse_ok:
+                result.parse_errors += 1
+            symbols = EXTRACTORS[sf.language](sf.content, tree)
+            file_id = db.insert_file(sf, parse_ok=parse_ok)
+            db.insert_symbols(file_id, symbols)
+            reparse.append((file_id, sf.abs_path, sf.language))
+            result.files_indexed += 1
+            result.symbol_count += len(symbols)
+            for s in symbols:
+                new_names.add(s.name)
+
+        # names whose EXISTENCE changed — the only ones that can flip a
+        # name_only ("was unique") or unresolved ("might resolve now") edge
+        affected_names = old_names ^ new_names
+
+        # ---- name_only edges elsewhere whose assumption may have broken --
+        if affected_names:
+            name_ph = ",".join("?" * len(affected_names))
+            for row in db.conn.execute(
+                    f"""SELECT DISTINCT s.file_id AS fid FROM edges e
+                        JOIN symbols s ON s.id = e.src_symbol_id
+                        WHERE e.dst_name IN ({name_ph})
+                          AND e.resolution IN ('name_only', 'unresolved')""",
+                    list(affected_names)):
+                dependent_ids.add(row["fid"])
+        dependent_ids -= {fid for fid, _, _ in reparse}
+
+        # ---- pass 2: changed+new files AND dependents ---------------------
+        # Dependents keep their symbols; only their outgoing edges/imports
+        # are stale. Wipe those, then resolve like any other file.
+        dependents: list[tuple[int, Path, str]] = []
+        if dependent_ids:
+            dep_ph = ",".join("?" * len(dependent_ids))
+            for row in db.conn.execute(
+                    f"SELECT id, path, language FROM files WHERE id IN ({dep_ph})"
+                    f" AND skipped_reason IS NULL", list(dependent_ids)):
+                dependents.append((row["id"], root / row["path"], row["language"]))
+            db.conn.execute(
+                f"""DELETE FROM edges WHERE src_symbol_id IN
+                    (SELECT id FROM symbols WHERE file_id IN ({dep_ph}))""",
+                list(dependent_ids))
+            db.conn.execute(
+                f"DELETE FROM imports WHERE file_id IN ({dep_ph})", list(dependent_ids))
+        result.dependents_reresolved = len(dependents)
+
+        resolver = Resolver(db, root)     # fresh view of the patched table
+        for file_id, abs_path, language in reparse + dependents:
+            try:
+                content = abs_path.read_bytes()
+            except OSError:
+                continue
+            tree = get_parser(language).parse(content)
+            calls = CALL_EXTRACTORS[language](content, tree)
+            imports = IMPORT_EXTRACTORS[language](content, tree)
+            edge_rows, import_rows = resolver.resolve_file(
+                file_id, language, imports, calls)
+            db.insert_edges(edge_rows)
+            db.insert_imports(import_rows)
+            result.edge_count += len(edge_rows)
+            result.import_count += len(import_rows)
+
+        # ---- history refresh only when HEAD moved -------------------------
+        if head and head != db.get_meta("commit_sha"):
+            hist = mine_history(root, db)
+            result.commits_scanned = hist.commits_scanned
+            result.cochange_pairs = hist.pairs_stored
+            db.set_meta("commit_sha", head)
+
+        db.set_meta("indexed_at", datetime.now(timezone.utc).isoformat())
+        result.seconds = time.perf_counter() - started
+        db.set_meta("index_seconds", f"{result.seconds:.2f}")
+        db.commit()
     finally:
         db.close()
 

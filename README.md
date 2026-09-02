@@ -272,10 +272,6 @@ Stack: Python ≥ 3.10 · tree-sitter (pinned `<0.26` — 0.26.0 has a native
 use-after-free, documented in [pyproject.toml](pyproject.toml)) · SQLite (WAL,
 recursive CTEs) · Typer/Rich · official MCP SDK.
 
-## Author
-
-**Keshav Kakani** — IIT Jodhpur, B.Tech Bioengineering + Artificial Intelligence
-([keshav9926](https://github.com/keshav9926))
 
 ## License
 

@@ -33,3 +33,7 @@ Thumbs.db
 
 # Excel lock files
 ~$*.xlsx
+
+# Phase-wise build plan + internal review — local working material
+INDEX-ROADMAP.md
+WRIGHT-ADVERSARIAL-REVIEW.pdf
